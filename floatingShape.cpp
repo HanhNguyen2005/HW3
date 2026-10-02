@@ -9,7 +9,6 @@
 #include <X11/keysym.h>
 using namespace std;
 
-// One point in 3D space.
 struct Point3D {
     double x;
     double y;
@@ -21,15 +20,14 @@ struct Point2D {
     int y;
 };
 
-// One line connecting two points.
-// Color: 0 = red, 1 = green, 2 = blue.
+// Store vertex indices so connected edges share the same transformed points.
+// Color indices select red, green, or blue from the rendering palette.
 struct Edge {
     int start;
     int end;
     int color;
 };
 
-// A shape contains points and the edges connecting them.
 struct Shape {
     vector<Point3D> points;
     vector<Edge> edges;
@@ -38,8 +36,6 @@ struct Shape {
 Shape createSquarePyramid() {
     Shape pyramid;
 
-    // Base corners: indices 0, 1, 2, 3.
-    // Tip: index 4.
     pyramid.points = {
         {-1, -1, -1},
         { 1, -1, -1},
@@ -48,8 +44,8 @@ Shape createSquarePyramid() {
         { 0,  1,  0}
     };
 
-    // Move the average vertex position to (0, 0, 0).
-    // This will be the center used for rotation.
+    // Center the vertices so rotation spins the pyramid around its vertex
+    // center instead of making it orbit the origin.
     Point3D center = {0, 0, 0};
 
     for (const Point3D& point : pyramid.points) {
@@ -69,11 +65,11 @@ Shape createSquarePyramid() {
     }
 
     pyramid.edges = {
-        {0, 1, 0},  // Base edges
+        {0, 1, 0},
         {1, 2, 1},
         {2, 3, 2},
         {3, 0, 0},
-        {0, 4, 1},  // Edges connecting the base to the tip
+        {0, 4, 1},
         {1, 4, 2},
         {2, 4, 0},
         {3, 4, 1}
@@ -82,8 +78,6 @@ Shape createSquarePyramid() {
     return pyramid;
 }
 
-// Return a rotated copy of a point.
-// angle is measured in radians.
 Point3D rotateX(Point3D point, double angle) {
     Point3D rotated;
 
@@ -114,8 +108,8 @@ Point3D rotateZ(Point3D point, double angle) {
     return rotated;
 }
 
-// A rigid camera transform preserves lengths and angles in 3D.
-// Match the reference camera: position (5, 7, 70), yaw initially -0.1.
+// Apply the inverse camera position and yaw to express world points
+// relative to the camera before projecting them.
 Point3D viewingTransform(Point3D point, double cameraYaw) {
     point.x -= 5.0;
     point.y -= 7.0;
@@ -124,6 +118,7 @@ Point3D viewingTransform(Point3D point, double cameraYaw) {
 }
 
 Point2D projectPoint(Point3D point) {
+    // The camera looks along negative Z; flip Y for downward screen coordinates.
     const double FOCAL_LENGTH = 600.0;
     double scale = FOCAL_LENGTH / -point.z;
     return {
@@ -146,7 +141,7 @@ void drawLine(XImage* image, Point2D start, Point2D end,
     int error = dx + dy;
 
     while (true) {
-        // Only write pixels inside the image.
+        // Projected lines can leave the image, so guard against out-of-bounds writes.
         if (x >= 0 && x < image->width &&
             y >= 0 && y < image->height) {
             XPutPixel(image, x, y, color);
@@ -173,7 +168,6 @@ void drawLine(XImage* image, Point2D start, Point2D end,
 Shape createTriangularPyramid() {
     Shape pyramid;
 
-    // Equilateral triangular base and a tip above it.
     const double root3 = sqrt(3.0);
 
     pyramid.points = {
@@ -183,7 +177,7 @@ Shape createTriangularPyramid() {
         { 0,  1.5,  0}
     };
 
-    // The average vertex position is already (0, 0, 0).
+    // These vertices already average to the origin, so no recentering is needed.
     pyramid.edges = {
         {0, 1, 0},
         {1, 2, 1},
@@ -199,14 +193,15 @@ Shape createTriangularPyramid() {
 Shape createCrossedBasePyramid() {
     Shape pyramid = createSquarePyramid();
 
-    // Add both diagonals of the square base.
+    // Reuse the square pyramid so this variant differs only in its base diagonals.
     pyramid.edges.push_back({0, 2, 1});
     pyramid.edges.push_back({1, 3, 2});
 
     return pyramid;
 }
 
-// Clip at the camera's near plane before dividing by depth.
+// Clip before projection to avoid dividing by near-zero depth or projecting
+// points behind the camera.
 void drawSegment(XImage* image, Point3D start, Point3D end,
                  double cameraYaw, unsigned long color) {
     start = viewingTransform(start, cameraYaw);
@@ -301,7 +296,7 @@ int main() {
     double angleY = 0.0;
     double angleZ = 0.0;
 
-    // Both rotations advance every frame, at the reference speeds.
+    // Match the reference animation with a faster Y rotation than Z rotation.
     const double Y_SPEED = PI / 2.0;
     const double Z_SPEED = PI / 10.0;
 
@@ -333,7 +328,8 @@ int main() {
     );
     XSetWMProtocols(display, window, &closeMessage, 1);
 
-    // The software framebuffer is fixed at 800 by 600.
+    // Prevent resizing because the pixel buffer and projection center
+    // assume an 800-by-600 window.
     XSizeHints sizeHints = {};
     sizeHints.flags = PMinSize | PMaxSize;
     sizeHints.min_width = sizeHints.max_width = WIDTH;
@@ -361,7 +357,6 @@ int main() {
     while (running) {
         auto frameStart = Clock::now();
 
-        // Process mouse, keyboard, and close events.
         while (XPending(display) > 0) {
             XEvent event;
             XNextEvent(display, &event);
@@ -413,8 +408,7 @@ int main() {
         angleY = fmod(angleY + Y_SPEED * elapsed, 2 * PI);
         angleZ = fmod(angleZ + Z_SPEED * elapsed, 2 * PI);
 
-        // White is all bits set on the supported TrueColor visual.
-        // Clear whole rows instead of calling XPutPixel 480,000 times.
+        // Fill the buffer with white in bulk to avoid 480,000 pixel function calls.
         memset(image->data, 0xff, image->bytes_per_line * HEIGHT);
 
         if (showAxes) {
@@ -427,20 +421,19 @@ int main() {
         const Shape& shape = shapes[currentShape];
         vector<Point3D> rotatedPoints;
         for (const Point3D& point : shape.points) {
-            // Compose Y and Z rotations on the original geometry each frame.
+            // Start from the original vertices to avoid accumulating rounding
+            // errors from repeatedly rotating already-rotated points.
             Point3D rotated = rotateZ(rotateY(point, angleY), angleZ);
-            // Reference shapes use approximately six world units per side.
+            // Scale the model to match the reference display size.
             rotatedPoints.push_back({6 * rotated.x, 6 * rotated.y,
                                      6 * rotated.z});
         }
 
-        // Draw the selected shape.
         for (const Edge& edge : shape.edges) {
             drawSegment(image, rotatedPoints[edge.start],
                         rotatedPoints[edge.end], cameraYaw, colors[edge.color]);
         }
 
-        // Send the completed image to the window.
         XPutImage(
             display, window, gc, image,
             0, 0, 0, 0, WIDTH, HEIGHT
@@ -458,12 +451,13 @@ int main() {
                 * 60.0) + 1;
             deadline = deadlineFor(scheduledFrame);
         }
-        // Standard C++ has no blocking timed wait without thread facilities.
-        // Poll the monotonic clock on this single thread until the deadline.
+        // Poll the clock to pace frames without introducing thread facilities;
+        // this keeps execution on one thread but uses CPU while waiting.
         while (Clock::now() < deadline) {
         }
 
-        // Report the actual loop frame rate once per second.
+        // Measure completed frames over elapsed time to report actual FPS
+        // instead of assuming the 60 FPS target was reached.
         frameCount++;
 
         auto now = Clock::now();
